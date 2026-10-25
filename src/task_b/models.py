@@ -32,6 +32,12 @@ class FlightCoupon(SQLModel):
     departure: AwareDatetime
     arrival: AwareDatetime
 
+    @model_validator(mode="after")
+    def validate_rail_times(self):
+        if self.arrival <= self.departure:
+            raise ValueError("arrival must be after departure")
+        return self
+
 
 class FlightMetadata(SQLModel):
     type: Literal["flight"]
@@ -85,6 +91,12 @@ class RailLeg(SQLModel):
     arrival: AwareDatetime
     train_number: str
     class_: Literal["standard", "first"] = Field(alias="class")
+    
+    @model_validator(mode="after")
+    def validate_flight_times(self):
+        if self.arrival <= self.departure:
+            raise ValueError("arrival must be after departure")
+        return self
 
 
 class RailMetadata(SQLModel):

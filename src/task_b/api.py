@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends
 from sqlmodel import Session, select
 
+
 from .database import get_session
 
 

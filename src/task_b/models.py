@@ -4,32 +4,38 @@ from typing import Any, Literal
 
 import pycountry
 from pydantic import AwareDatetime, ValidationInfo, field_validator, model_validator
+from sqlalchemy import DECIMAL, String
 from sqlmodel import Field, SQLModel
+from sqlmodel.sql.sqltypes import UTCDateTime
+
+# UTCDateTime keeps database round trips timezone-aware, including on SQLite.
 
 # ---------- Reusable line models ----------
 
 
 class TaxLine(SQLModel):
-    name: str = Field(min_length=1)
-    rate: Decimal | None = None
-    amount: Decimal
+    name: str = Field(min_length=1, max_length=512, sa_type=String(512))
+    rate: Decimal | None = Field(
+        default=None, max_digits=12, decimal_places=5, sa_type=DECIMAL(12, 5)
+    )
+    amount: Decimal = Field(max_digits=12, decimal_places=2, sa_type=DECIMAL(12, 2))
 
 
 class FeeLine(SQLModel):
-    name: str = Field(min_length=1)
-    amount: Decimal
+    name: str = Field(min_length=1, max_length=512, sa_type=String(512))
+    amount: Decimal = Field(max_digits=12, decimal_places=2, sa_type=DECIMAL(12, 2))
 
 
 # ---------- Metadata models ----------
 
 
 class FlightCoupon(SQLModel):
-    carrier: str | None = None
-    flight_number: str
-    from_: str = Field(alias="from")
-    to: str
-    departure: AwareDatetime
-    arrival: AwareDatetime
+    carrier: str | None = Field(default=None, max_length=512, sa_type=String(512))
+    flight_number: str = Field(max_length=512, sa_type=String(512))
+    from_: str = Field(alias="from", max_length=512, sa_type=String(512))
+    to: str = Field(max_length=512, sa_type=String(512))
+    departure: AwareDatetime = Field(sa_type=UTCDateTime())
+    arrival: AwareDatetime = Field(sa_type=UTCDateTime())
 
     @model_validator(mode="after")
     def validate_flight_times(self):
@@ -39,30 +45,32 @@ class FlightCoupon(SQLModel):
 
 
 class FlightMetadata(SQLModel):
-    origin: str
-    destination: str
-    fare: Decimal
+    origin: str = Field(max_length=512, sa_type=String(512))
+    destination: str = Field(max_length=512, sa_type=String(512))
+    fare: Decimal = Field(max_digits=12, decimal_places=2, sa_type=DECIMAL(12, 2))
     coupons: list[FlightCoupon]
 
 
 class HotelAddress(SQLModel):
-    street: str
-    city: str
-    country: str
+    street: str = Field(max_length=512, sa_type=String(512))
+    city: str = Field(max_length=512, sa_type=String(512))
+    country: str = Field(max_length=512, sa_type=String(512))
 
 
 class HotelExtra(SQLModel):
-    name: str
-    amount: Decimal
+    name: str = Field(max_length=512, sa_type=String(512))
+    amount: Decimal = Field(max_digits=12, decimal_places=2, sa_type=DECIMAL(12, 2))
 
 
 class HotelMetadata(SQLModel):
-    name: str
+    name: str = Field(max_length=512, sa_type=String(512))
     address: HotelAddress
     check_in: date
     check_out: date
     nights: int = Field(gt=0)
-    room_rate_per_night: Decimal
+    room_rate_per_night: Decimal = Field(
+        max_digits=12, decimal_places=2, sa_type=DECIMAL(12, 2)
+    )
     extras: list[HotelExtra] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -82,12 +90,14 @@ class HotelMetadata(SQLModel):
 
 
 class RailLeg(SQLModel):
-    origin: str
-    destination: str
-    departure: AwareDatetime
-    arrival: AwareDatetime
-    train_number: str | None = None
-    class_: Literal["standard", "first"] | None = Field(default=None, alias="class")
+    origin: str = Field(max_length=512, sa_type=String(512))
+    destination: str = Field(max_length=512, sa_type=String(512))
+    departure: AwareDatetime = Field(sa_type=UTCDateTime())
+    arrival: AwareDatetime = Field(sa_type=UTCDateTime())
+    train_number: str | None = Field(default=None, max_length=512, sa_type=String(512))
+    class_: Literal["standard", "first"] | None = Field(
+        default=None, alias="class", max_length=512, sa_type=String(512)
+    )
 
     @model_validator(mode="after")
     def validate_rail_times(self):
@@ -101,9 +111,13 @@ class RailMetadata(SQLModel):
 
 
 class NavanFeeMetadata(SQLModel):
-    fee_kind: Literal["trip_fee", "agent_call_fee"]
-    description: str | None = None
-    related_external_id: str | None = None
+    fee_kind: Literal["trip_fee", "agent_call_fee"] = Field(
+        max_length=512, sa_type=String(512)
+    )
+    description: str | None = Field(default=None, max_length=512, sa_type=String(512))
+    related_external_id: str | None = Field(
+        default=None, max_length=512, sa_type=String(512)
+    )
 
 
 # ---------- Metadata types ----------
@@ -122,11 +136,13 @@ METADATA_MODELS: dict[str, type[TransactionMetadata]] = {
 
 
 class Transactions(SQLModel):
-    type: Literal["flight", "hotel", "rail", "navan_fee"]
-    external_id: str = Field(min_length=1)
-    currency: str = Field(min_length=3, max_length=3)
-    occurred_at: AwareDatetime
-    total: Decimal
+    type: Literal["flight", "hotel", "rail", "navan_fee"] = Field(
+        max_length=512, sa_type=String(512)
+    )
+    external_id: str = Field(min_length=1, max_length=512, sa_type=String(512))
+    currency: str = Field(min_length=3, max_length=3, sa_type=String(3))
+    occurred_at: AwareDatetime = Field(sa_type=UTCDateTime())
+    total: Decimal = Field(max_digits=12, decimal_places=2, sa_type=DECIMAL(12, 2))
 
     tax_lines: list[TaxLine]
     fee_lines: list[FeeLine]
@@ -144,15 +160,14 @@ class Transactions(SQLModel):
         # `type` must be declared before metadata so it is validated first.
         metadata_model = METADATA_MODELS.get(str(info.data.get("type")))
         if metadata_model is None:
-            raise ValueError("A valid transaction type is required to validate metadata")
+            raise ValueError(
+                "A valid transaction type is required to validate metadata"
+            )
         return metadata_model.model_validate(value)
 
     @field_validator("currency")
     @classmethod
     def validate_currency(cls, value: str) -> str:
-        if not isinstance(value, str):
-            raise ValueError("Currency must be a valid ISO 4217 code")
-
         if value != value.upper() or len(value) != 3 or not value.isalpha():
             raise ValueError("Currency must be exactly 3 uppercase letters")
 

@@ -24,7 +24,7 @@ class FeeLine(SQLModel):
 
 
 class FlightCoupon(SQLModel):
-    carrier: str
+    carrier: str | None = None
     flight_number: str
     from_: str = Field(alias="from")
     to: str
@@ -63,7 +63,7 @@ class HotelMetadata(SQLModel):
     check_out: date
     nights: int = Field(gt=0)
     room_rate_per_night: Decimal
-    extras: list[HotelExtra]
+    extras: list[HotelExtra] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_stay(self):
@@ -86,8 +86,8 @@ class RailLeg(SQLModel):
     destination: str
     departure: AwareDatetime
     arrival: AwareDatetime
-    train_number: str
-    class_: Literal["standard", "first"] = Field(alias="class")
+    train_number: str | None = None
+    class_: Literal["standard", "first"] | None = Field(default=None, alias="class")
 
     @model_validator(mode="after")
     def validate_rail_times(self):
@@ -102,8 +102,8 @@ class RailMetadata(SQLModel):
 
 class NavanFeeMetadata(SQLModel):
     fee_kind: Literal["trip_fee", "agent_call_fee"]
-    description: str
-    related_external_id: str
+    description: str | None = None
+    related_external_id: str | None = None
 
 
 # ---------- Metadata types ----------

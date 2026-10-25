@@ -135,7 +135,7 @@ METADATA_MODELS: dict[str, type[TransactionMetadata]] = {
 # ---------- Main transaction model ----------
 
 
-class Transactions(SQLModel):
+class Transaction(SQLModel):
     type: Literal["flight", "hotel", "rail", "navan_fee"] = Field(
         max_length=512, sa_type=String(512)
     )

@@ -1,8 +1,8 @@
 import uvicorn
-from alembic import command
 from alembic.config import Config
 
-from src.task_b.api import api
+from alembic import command
+from task_b.api import api
 
 
 def run_migrations():

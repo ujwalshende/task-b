@@ -1,11 +1,10 @@
 from datetime import date
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Any, Literal
 
-from pydantic import AwareDatetime, Field as PydanticField, model_validator, field_validator
-from sqlmodel import Field, SQLModel
 import pycountry
-
+from pydantic import AwareDatetime, ValidationInfo, field_validator, model_validator
+from sqlmodel import Field, SQLModel
 
 # ---------- Reusable line models ----------
 
@@ -40,7 +39,6 @@ class FlightCoupon(SQLModel):
 
 
 class FlightMetadata(SQLModel):
-    type: Literal["flight"]
     origin: str
     destination: str
     fare: Decimal
@@ -59,7 +57,6 @@ class HotelExtra(SQLModel):
 
 
 class HotelMetadata(SQLModel):
-    type: Literal["hotel"]
     name: str
     address: HotelAddress
     check_in: date
@@ -100,23 +97,25 @@ class RailLeg(SQLModel):
 
 
 class RailMetadata(SQLModel):
-    type: Literal["rail"]
     legs: list[RailLeg] = Field(min_length=1)
 
 
 class NavanFeeMetadata(SQLModel):
-    type: Literal["navan_fee"]
     fee_kind: Literal["trip_fee", "agent_call_fee"]
     description: str
     related_external_id: str
 
 
-# ---------- Discriminated union ----------
+# ---------- Metadata types ----------
 
-TransactionMetadata = Annotated[
-    FlightMetadata | HotelMetadata | RailMetadata | NavanFeeMetadata,
-    PydanticField(discriminator="type"),
-]
+TransactionMetadata = FlightMetadata | HotelMetadata | RailMetadata | NavanFeeMetadata
+
+METADATA_MODELS: dict[str, type[TransactionMetadata]] = {
+    "flight": FlightMetadata,
+    "hotel": HotelMetadata,
+    "rail": RailMetadata,
+    "navan_fee": NavanFeeMetadata,
+}
 
 
 # ---------- Main transaction model ----------
@@ -137,16 +136,17 @@ class Transactions(SQLModel):
         serialization_alias="metadata",
     )
 
-    @model_validator(mode="after")
-    def validate_metadata_type(self):
-        if self.type != self.transaction_metadata.type:
-            raise ValueError(
-                f"Transaction type '{self.type}' does not match "
-                f"metadata type '{self.transaction_metadata.type}'"
-            )
+    @field_validator("transaction_metadata", mode="before")
+    @classmethod
+    def validate_transaction_metadata(
+        cls, value: Any, info: ValidationInfo
+    ) -> TransactionMetadata:
+        # `type` must be declared before metadata so it is validated first.
+        metadata_model = METADATA_MODELS.get(str(info.data.get("type")))
+        if metadata_model is None:
+            raise ValueError("A valid transaction type is required to validate metadata")
+        return metadata_model.model_validate(value)
 
-        return self
-    
     @field_validator("currency")
     @classmethod
     def validate_currency(cls, value: str) -> str:

@@ -1,8 +1,13 @@
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
-from .api_classes import TransactionCreateAPI, TransactionResponseAPI
-from .db_classes import TransactionDB
+from .api_classes import (
+    InvoiceAPI,
+    InvoiceCreateAPI,
+    TransactionCreateAPI,
+    TransactionResponseAPI,
+)
+from .db_classes import InvoiceDB, TransactionDB
 
 
 class DuplicateTransactionError(Exception):
@@ -40,3 +45,23 @@ def get_transaction_api(
     stmt = select(TransactionDB).where(TransactionDB.id == transaction_id)
     db = session.exec(stmt).first()
     return TransactionResponseAPI.from_db(db) if db is not None else None
+
+
+def create_invoice(session: Session, invoice: InvoiceCreateAPI) -> InvoiceAPI:
+    """Freeze stored transactions and attach them in one SQLite write transaction."""
+    try:
+        # Lock before reading so concurrent writers cannot change a partially read trip.
+        session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        db = invoice.to_db(session)
+        session.add(db)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    session.refresh(db)
+    return InvoiceAPI.from_db(db)
+
+
+def get_invoice_api(session: Session, invoice_id: int) -> InvoiceAPI | None:
+    db = session.get(InvoiceDB, invoice_id)
+    return InvoiceAPI.from_db(db) if db is not None else None

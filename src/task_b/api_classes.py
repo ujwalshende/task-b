@@ -2,7 +2,7 @@
 from decimal import Decimal
 from typing import Self
 
-from pydantic import ValidationInfo, field_validator, model_validator
+from pydantic import ValidationInfo, computed_field, field_validator, model_validator
 from sqlmodel import Field, Session, SQLModel, col, select
 from sqlmodel._compat import SQLModelConfig
 
@@ -182,6 +182,14 @@ class InvoiceTransactionAPI(TransactionCreateAPI):
         })
 
 
+class InvoiceTransactionsNotFoundError(LookupError):
+    """At least one transaction requested for an invoice does not exist."""
+
+
+class InvoiceCurrencyConflictError(ValueError):
+    """An invoice cannot combine transactions in different currencies."""
+
+
 class InvoiceCreateAPI(SQLModel):
     """Invoice creation or replacement input, containing only transaction IDs."""
 
@@ -205,11 +213,11 @@ class InvoiceCreateAPI(SQLModel):
         by_id = {transaction.id: transaction for transaction in stored}
         missing = [transaction_id for transaction_id in self.transaction_ids if transaction_id not in by_id]
         if missing:
-            raise LookupError(f"Transactions not found: {missing}")
+            raise InvoiceTransactionsNotFoundError(f"Transactions not found: {missing}")
         transactions = [by_id[transaction_id] for transaction_id in self.transaction_ids]
         currencies = {transaction.currency for transaction in transactions}
         if len(currencies) != 1:
-            raise ValueError("All invoice transactions must use the same currency")
+            raise InvoiceCurrencyConflictError("All invoice transactions must use the same currency")
 
         snapshots = [
             InvoiceTransactionAPI.from_db(by_id[transaction_id])
@@ -245,6 +253,15 @@ class InvoiceCreateAPI(SQLModel):
         )
 
 
+class InvoiceTotalsAPI(SQLModel):
+    flight: Decimal = Field(default=Decimal("0.00"), max_digits=12, decimal_places=2)
+    hotel: Decimal = Field(default=Decimal("0.00"), max_digits=12, decimal_places=2)
+    rail: Decimal = Field(default=Decimal("0.00"), max_digits=12, decimal_places=2)
+    trip_fee: Decimal = Field(default=Decimal("0.00"), max_digits=12, decimal_places=2)
+    agent_call_fee: Decimal = Field(default=Decimal("0.00"), max_digits=12, decimal_places=2)
+    grand_total: Decimal = Field(default=Decimal("0.00"), max_digits=12, decimal_places=2)
+
+
 class InvoiceAPI(InvoiceBase):
     """Invoice response with frozen transactions, totals, and rollups."""
 
@@ -253,6 +270,18 @@ class InvoiceAPI(InvoiceBase):
     transactions: list[InvoiceTransactionAPI] = Field(min_length=1)
     tax_rollup: list[TaxLineAPI]
     fee_rollup: list[FeeLineAPI]
+
+    @computed_field
+    @property
+    def totals(self) -> InvoiceTotalsAPI:
+        """Build the fixture's breakdown from frozen transaction amounts."""
+        amounts = dict.fromkeys(InvoiceTotalsAPI.model_fields, Decimal("0.00"))
+        for transaction in self.transactions:
+            metadata = transaction.transaction_metadata
+            kind = metadata.fee_kind if isinstance(metadata, NavanFeeMetadataAPI) else transaction.type
+            amounts[kind] += transaction.total
+            amounts["grand_total"] += transaction.total
+        return InvoiceTotalsAPI.model_validate(amounts)
 
     @classmethod
     def from_db(cls, db: InvoiceDB) -> Self:

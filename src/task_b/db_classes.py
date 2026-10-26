@@ -5,12 +5,21 @@ Import this module before accessing SQLModel.metadata in Alembic's env.py.
 from typing import Any
 
 from sqlalchemy import JSON
-from sqlmodel import Field, Relationship
+from sqlmodel import Field, Relationship, SQLModel
 
 from .base_classes import (
-    TaxLineBase, FeeLineBase, FlightCouponBase, FlightMetadataBase,
-    HotelAddressBase, HotelExtraBase, HotelMetadataBase, RailLegBase,
-    RailMetadataBase, NavanFeeMetadataBase, TransactionBase, InvoiceBase,
+    FeeLineBase,
+    FlightCouponBase,
+    FlightMetadataBase,
+    HotelAddressBase,
+    HotelExtraBase,
+    HotelMetadataBase,
+    InvoiceBase,
+    NavanFeeMetadataBase,
+    RailLegBase,
+    RailMetadataBase,
+    TaxLineBase,
+    TransactionBase,
 )
 
 # SQLModel uses 'sa_relationship_kwargs', not 'sa_kwargs', for loader options.
@@ -101,6 +110,24 @@ class InvoiceDB(InvoiceBase, table=True):
     transactions: list["TransactionDB"] = Relationship(
         back_populates="invoice", sa_relationship_kwargs=EAGER
     )
+    snapshot_references: list["InvoiceTransactionReferenceDB"] = Relationship(
+        back_populates="invoice", cascade_delete=True, sa_relationship_kwargs=EAGER
+    )
+
+
+class InvoiceTransactionReferenceDB(SQLModel, table=True):
+    """
+    Created to store invoice_id and transaction_id mappings. Two invoices can reference the same transaction_id. 
+    Deleting the latest live parent invoice one makes the invoice_id in TransactionDB None. But it still exists on the old invoice.
+    """
+    __tablename__ = "invoice_transaction_reference" # type: ignore
+    invoice_id: int = Field(foreign_key="invoice.id", ondelete="CASCADE", primary_key=True)
+    transaction_id: int = Field(foreign_key="transaction.id", ondelete="RESTRICT", primary_key=True, index=True)
+    invoice: InvoiceDB = Relationship(back_populates="snapshot_references")
+
+    def __init__(self, *, transaction_id: int, invoice: InvoiceDB) -> None:
+        """Link the parent object; SQLAlchemy fills invoice_id when it is saved."""
+        super().__init__(transaction_id=transaction_id, invoice=invoice)
 
 
 class TransactionDB(TransactionBase, table=True):

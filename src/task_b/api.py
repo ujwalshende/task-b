@@ -4,7 +4,9 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from sqlmodel import Session
+from starlette.responses import Response
 
 from .api_classes import (
     InvoiceAPI,
@@ -12,15 +14,22 @@ from .api_classes import (
     InvoiceCurrencyConflictError,
     InvoiceTransactionsNotFoundError,
     TransactionCreateAPI,
+    TransactionPatchAPI,
     TransactionResponseAPI,
 )
 from .database import get_session
 from .queries import (
+    BilledTransactionError,
     DuplicateTransactionError,
+    ResourceNotFoundError,
     create_invoice,
     create_transaction,
+    delete_invoice,
+    delete_transaction,
     get_invoice_api,
     get_transaction_api,
+    update_invoice,
+    update_transaction,
 )
 
 api = FastAPI()
@@ -48,6 +57,18 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     )
 
 
+@api.exception_handler(ResourceNotFoundError)
+@api.exception_handler(InvoiceTransactionsNotFoundError)
+async def not_found_handler(request: Request, exc: LookupError):
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@api.exception_handler(BilledTransactionError)
+@api.exception_handler(InvoiceCurrencyConflictError)
+async def billing_conflict_handler(request: Request, exc: ValueError):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
 @api.post("/transactions", response_model=TransactionResponseAPI, status_code=201)
 def post_transaction(
     transaction: TransactionCreateAPI, session: Annotated[Session, Depends(get_session)]
@@ -69,12 +90,7 @@ def read_transaction(
 def post_invoice(
     invoice: InvoiceCreateAPI, session: Annotated[Session, Depends(get_session)]
 ) -> InvoiceAPI:
-    try:
-        return create_invoice(session, invoice)
-    except InvoiceTransactionsNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except InvoiceCurrencyConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return create_invoice(session, invoice)
 
 
 @api.get("/invoices/{invoice_id}", response_model=InvoiceAPI)
@@ -85,6 +101,45 @@ def read_invoice(
     if invoice is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
     return invoice
+
+
+@api.patch("/transactions/{transaction_id}", response_model=TransactionResponseAPI)
+def patch_transaction(
+    transaction_id: int,
+    patch: TransactionPatchAPI,
+    session: Annotated[Session, Depends(get_session)],
+) -> TransactionResponseAPI:
+    try:
+        return update_transaction(session, transaction_id, patch)
+    except ValidationError as exc:
+        raise RequestValidationError([
+            {**error, "loc": ("body", *error["loc"])} for error in exc.errors()
+        ]) from exc
+
+
+@api.delete("/transactions/{transaction_id}", status_code=204)
+def remove_transaction(
+    transaction_id: int, session: Annotated[Session, Depends(get_session)]
+) -> Response:
+    delete_transaction(session, transaction_id)
+    return Response(status_code=204)
+
+
+@api.patch("/invoices/{invoice_id}", response_model=InvoiceAPI)
+def patch_invoice(
+    invoice_id: int,
+    invoice: InvoiceCreateAPI,
+    session: Annotated[Session, Depends(get_session)],
+) -> InvoiceAPI:
+    return update_invoice(session, invoice_id, invoice)
+
+
+@api.delete("/invoices/{invoice_id}", status_code=204)
+def remove_invoice(
+    invoice_id: int, session: Annotated[Session, Depends(get_session)]
+) -> Response:
+    delete_invoice(session, invoice_id)
+    return Response(status_code=204)
 
 
 @api.get("/")

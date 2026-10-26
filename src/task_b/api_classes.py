@@ -2,7 +2,13 @@
 from decimal import Decimal
 from typing import Self
 
-from pydantic import ValidationInfo, computed_field, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    ValidationInfo,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 from sqlmodel import Field, Session, SQLModel, col, select
 from sqlmodel._compat import SQLModelConfig
 
@@ -28,6 +34,7 @@ from .db_classes import (
     HotelExtraDB,
     HotelMetadataDB,
     InvoiceDB,
+    InvoiceTransactionReferenceDB,
     NavanFeeMetadataDB,
     RailLegDB,
     RailMetadataDB,
@@ -133,6 +140,25 @@ class TransactionCreateAPI(TransactionBase):
         return db
 
 
+class TransactionPatchAPI(SQLModel):
+    """Partial transaction update; provided lists and metadata replace existing values."""
+
+    model_config = SQLModelConfig(extra="forbid", populate_by_name=True)
+
+    total: Decimal | None = Field(default=None, max_digits=12, decimal_places=2)
+    occurred_at: AwareDatetime | None = None
+    tax_lines: list[TaxLineAPI] | None = None
+    fee_lines: list[FeeLineAPI] | None = None
+    transaction_metadata: dict[str, object] | None = Field(default=None, alias="metadata")
+
+    @model_validator(mode="after")
+    def reject_explicit_null(self) -> Self:
+        for name in self.model_fields_set:
+            if getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        return self
+
+
 class TransactionResponseAPI(TransactionCreateAPI):
     """Stored transaction, including its server-generated primary key."""
 
@@ -205,8 +231,8 @@ class InvoiceCreateAPI(SQLModel):
         # Keep request order while counting each transaction only once.
         return list(dict.fromkeys(value))
 
-    def to_db(self, session: Session) -> InvoiceDB:
-        """Build an unsaved invoice snapshot from existing stored transactions."""
+    def to_db(self, session: Session, *, existing: InvoiceDB | None = None) -> InvoiceDB:
+        """Build or replace an invoice snapshot from existing stored transactions."""
         stored = session.exec(
             select(TransactionDB).where(col(TransactionDB.id).in_(self.transaction_ids))
         ).all()
@@ -243,14 +269,34 @@ class InvoiceCreateAPI(SQLModel):
             ],
             fee_rollup=[FeeLineAPI(name=name, amount=amount) for name, amount in fees.items()],
         )
-        return InvoiceDB(
-            currency=invoice.currency,
-            total=invoice.total,
-            transaction_snapshots=[snapshot.model_dump(mode="json", by_alias=True) for snapshot in invoice.transactions],
-            tax_rollup=[tax.model_dump(mode="json") for tax in invoice.tax_rollup],
-            fee_rollup=[fee.model_dump(mode="json") for fee in invoice.fee_rollup],
-            transactions=transactions,
-        )
+        transaction_snapshots = [snapshot.model_dump(mode="json", by_alias=True) for snapshot in invoice.transactions]
+        tax_rollup = [tax.model_dump(mode="json") for tax in invoice.tax_rollup]
+        fee_rollup = [fee.model_dump(mode="json") for fee in invoice.fee_rollup]
+        if existing is None: # create a new DBObject
+            db = InvoiceDB(
+                currency=invoice.currency,
+                total=invoice.total,
+                transaction_snapshots=transaction_snapshots,
+                tax_rollup=tax_rollup,
+                fee_rollup=fee_rollup,
+            )
+        else:
+            db = existing
+            db.currency = invoice.currency
+            db.total = invoice.total
+            db.transaction_snapshots = transaction_snapshots
+            db.tax_rollup = tax_rollup
+            db.fee_rollup = fee_rollup
+        db.transactions = transactions
+        references = {reference.transaction_id: reference for reference in db.snapshot_references}
+        updated_references = []
+        for transaction_id in self.transaction_ids:
+            reference = references.get(transaction_id)
+            if reference is None:
+                reference = InvoiceTransactionReferenceDB(transaction_id=transaction_id, invoice=db)
+            updated_references.append(reference)
+        db.snapshot_references = updated_references
+        return db
 
 
 class InvoiceTotalsAPI(SQLModel):

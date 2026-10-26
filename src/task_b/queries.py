@@ -1,7 +1,8 @@
 from contextlib import contextmanager
 
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, select
+from sqlalchemy.orm import raiseload
+from sqlmodel import Session, col, select
 
 from .api_classes import (
     FlightMetadataAPI,
@@ -23,6 +24,8 @@ from .db_classes import (
     TaxLineDB,
     TransactionDB,
 )
+
+MAX_OFFSET = 2**63 - 1
 
 
 class DuplicateTransactionError(Exception):
@@ -104,6 +107,34 @@ def get_transaction_api(
     stmt = select(TransactionDB).where(TransactionDB.id == transaction_id)
     db = session.exec(stmt).first()
     return TransactionResponseAPI.from_db(db) if db is not None else None
+
+
+def _page_bounds(limit: int, offset: int) -> tuple[int, int]:
+    if limit < 1 or not 0 <= offset <= MAX_OFFSET:
+        raise ValueError("limit must be positive and offset must fit a non-negative SQLite integer")
+    return min(limit, 100), offset
+
+
+def list_transactions_api(
+    session: Session, *, limit: int = 50, offset: int = 0
+) -> list[TransactionResponseAPI]:
+    limit, offset = _page_bounds(limit, offset)
+    statement = select(TransactionDB).order_by(col(TransactionDB.id)).limit(limit).offset(offset)
+    return [TransactionResponseAPI.from_db(db) for db in session.exec(statement).all()]
+
+
+def list_invoices_api(
+    session: Session, *, limit: int = 50, offset: int = 0
+) -> list[InvoiceAPI]:
+    limit, offset = _page_bounds(limit, offset)
+    statement = (
+        select(InvoiceDB)
+        .options(raiseload("*"))
+        .order_by(col(InvoiceDB.id))
+        .limit(limit)
+        .offset(offset)
+    )
+    return [InvoiceAPI.from_db(db) for db in session.exec(statement).all()]
 
 
 def create_invoice(session: Session, invoice: InvoiceCreateAPI) -> InvoiceAPI:

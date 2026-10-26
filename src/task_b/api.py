@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -19,6 +19,7 @@ from .api_classes import (
 )
 from .database import get_session
 from .queries import (
+    MAX_OFFSET,
     BilledTransactionError,
     DuplicateTransactionError,
     ResourceNotFoundError,
@@ -28,6 +29,8 @@ from .queries import (
     delete_transaction,
     get_invoice_api,
     get_transaction_api,
+    list_invoices_api,
+    list_transactions_api,
     update_invoice,
     update_transaction,
 )
@@ -76,6 +79,15 @@ def post_transaction(
     return create_transaction(session, transaction)
 
 
+@api.get("/transactions", response_model=list[TransactionResponseAPI])
+def list_transactions(
+    session: Annotated[Session, Depends(get_session)],
+    limit: Annotated[int, Query(ge=1, description="Page size; values above 100 are capped")] = 50,
+    offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
+) -> list[TransactionResponseAPI]:
+    return list_transactions_api(session, limit=limit, offset=offset)
+
+
 @api.get("/transactions/{transaction_id}", response_model=TransactionResponseAPI)
 def read_transaction(
     transaction_id: int, session: Annotated[Session, Depends(get_session)]
@@ -91,6 +103,15 @@ def post_invoice(
     invoice: InvoiceCreateAPI, session: Annotated[Session, Depends(get_session)]
 ) -> InvoiceAPI:
     return create_invoice(session, invoice)
+
+
+@api.get("/invoices", response_model=list[InvoiceAPI])
+def list_invoices(
+    session: Annotated[Session, Depends(get_session)],
+    limit: Annotated[int, Query(ge=1, description="Page size; values above 100 are capped")] = 50,
+    offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
+) -> list[InvoiceAPI]:
+    return list_invoices_api(session, limit=limit, offset=offset)
 
 
 @api.get("/invoices/{invoice_id}", response_model=InvoiceAPI)

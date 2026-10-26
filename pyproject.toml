@@ -31,5 +31,5 @@ addopts = ["--basetemp=.pytest-tmp", "-p", "no:cacheprovider"]
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
+    "httpx2>=2.16.0",
 ]

@@ -2,6 +2,9 @@
 
 Import this module before accessing SQLModel.metadata in Alembic's env.py.
 """
+from typing import Any
+
+from sqlalchemy import JSON
 from sqlmodel import Field, Relationship, SQLModel
 from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
@@ -9,9 +12,9 @@ from sqlmodel import Session, select
 from .base_classes import (
     TaxLineBase, FeeLineBase, FlightCouponBase, FlightMetadataBase,
     HotelAddressBase, HotelExtraBase, HotelMetadataBase, RailLegBase,
-    RailMetadataBase, NavanFeeMetadataBase, TransactionBase,
+    RailMetadataBase, NavanFeeMetadataBase, TransactionBase, InvoiceBase,
 )
-from .api_classes import TransactionAPI
+from .api_classes import InvoiceAPI, TransactionAPI
 
 # SQLModel uses 'sa_relationship_kwargs', not 'sa_kwargs', for loader options.
 # 'selectin' eager loading batches collections and avoids most N+1 queries.
@@ -92,9 +95,34 @@ class NavanFeeMetadataDB(NavanFeeMetadataBase, table=True):
     transaction: "TransactionDB" = Relationship(back_populates="navan_fee_metadata", sa_relationship_kwargs=EAGER)
 
 
+class InvoiceDB(InvoiceBase, table=True):
+    __tablename__ = "invoice" # type: ignore
+    id: int | None = Field(default=None, primary_key=True)
+    transaction_snapshots: list[dict[str, Any]] = Field(sa_type=JSON)
+    tax_rollup: list[dict[str, Any]] = Field(sa_type=JSON)
+    fee_rollup: list[dict[str, Any]] = Field(sa_type=JSON)
+    transactions: list["TransactionDB"] = Relationship(
+        back_populates="invoice", sa_relationship_kwargs=EAGER
+    )
+
+    def to_api(self) -> InvoiceAPI:
+        """Read the stored snapshot, independently of live transaction changes."""
+        return InvoiceAPI.model_validate({
+            "id": self.id,
+            "currency": self.currency,
+            "total": self.total,
+            "transaction_ids": [snapshot["transaction_id"] for snapshot in self.transaction_snapshots],
+            "transactions": self.transaction_snapshots,
+            "tax_rollup": self.tax_rollup,
+            "fee_rollup": self.fee_rollup,
+        })
+
+
 class TransactionDB(TransactionBase, table=True):
     __tablename__ = "transaction" # type: ignore
     id: int | None = Field(default=None, primary_key=True)
+    invoice_id: int | None = Field(default=None, foreign_key="invoice.id", ondelete="SET NULL", nullable=True, index=True)
+    invoice: InvoiceDB | None = Relationship(back_populates="transactions")
     tax_lines: list[TaxLineDB] = Relationship(back_populates="transaction", cascade_delete=True, sa_relationship_kwargs=EAGER)
     fee_lines: list[FeeLineDB] = Relationship(back_populates="transaction", cascade_delete=True, sa_relationship_kwargs=EAGER)
     flight_metadata: FlightMetadataDB | None = Relationship(back_populates="transaction", cascade_delete=True, sa_relationship_kwargs={"lazy": "selectin", "uselist": False, "single_parent": True})

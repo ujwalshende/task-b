@@ -113,3 +113,13 @@ class TransactionBase(SQLModel):
         if pycountry.currencies.get(alpha_3=value) is None:
             raise ValueError(f"Invalid ISO 4217 currency code: {value}")
         return value
+
+
+class InvoiceBase(SQLModel):
+    currency: str = Field(min_length=3, max_length=3, sa_type=String(3), nullable=False)
+    total: Decimal = Field(max_digits=12, decimal_places=2, sa_type=DECIMAL(12, 2), nullable=False)
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, value: str) -> str:
+        return TransactionBase.validate_currency(value)

@@ -5,7 +5,7 @@ from sqlalchemy import pool
 from sqlmodel import SQLModel
 
 from alembic import context
-from task_b.db_models import *
+from task_b.db_classes import *
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

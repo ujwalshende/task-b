@@ -224,10 +224,3 @@ class InvoiceAPI(InvoiceBase):
             "tax_rollup": db.tax_rollup,
             "fee_rollup": db.fee_rollup,
         })
-
-
-def get_transaction_api(session: Session, transaction_id: int) -> TransactionAPI | None:
-    """Load nested relationships before converting to API schema."""
-    stmt = select(TransactionDB).where(TransactionDB.id == transaction_id)
-    db = session.exec(stmt).first()
-    return TransactionAPI.from_db(db) if db is not None else None

@@ -1,6 +1,6 @@
 """Nested ID-free input/output schemas, preserving the four metadata field names."""
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import Self
 
 from pydantic import field_validator, model_validator
 from sqlmodel import Field, Session, SQLModel, col, select
@@ -12,8 +12,11 @@ from .base_classes import (
     RailMetadataBase, NavanFeeMetadataBase, TransactionBase, InvoiceBase,
 )
 
-if TYPE_CHECKING:
-    from .db_classes import InvoiceDB, TransactionDB
+from .db_classes import (
+    TransactionDB, TaxLineDB, FeeLineDB, FlightMetadataDB, FlightCouponDB,
+    HotelMetadataDB, HotelAddressDB, HotelExtraDB, RailMetadataDB,
+    RailLegDB, NavanFeeMetadataDB, InvoiceDB,
+)
 
 
 class APIConfig:
@@ -92,14 +95,13 @@ class TransactionAPI(TransactionBase, table=False):
                 raise ValueError(f"{field_name} must be None when type is '{self.type}'")
         return self
 
-    def to_db(self) -> "TransactionDB":
-        """Create a fresh, unsaved ORM graph from this validated API input."""
-        from .db_classes import (
-            TransactionDB, TaxLineDB, FeeLineDB, FlightMetadataDB, FlightCouponDB,
-            HotelMetadataDB, HotelAddressDB, HotelExtraDB, RailMetadataDB,
-            RailLegDB, NavanFeeMetadataDB,
-        )
+    @classmethod
+    def from_db(cls, db: TransactionDB) -> Self:
+        """Validate a loaded ORM graph into an ID-free nested API schema."""
+        return cls.model_validate(db, from_attributes=True)
 
+    def to_db(self) -> TransactionDB:
+        """Create a fresh, unsaved ORM graph from this validated API input."""
         data = self.model_dump(exclude={
             "tax_lines", "fee_lines", "flight_metadata", "hotel_metadata",
             "rail_metadata", "navan_fee_metadata",
@@ -151,10 +153,8 @@ class InvoiceCreateAPI(SQLModel):
         # Keep request order while counting each transaction only once.
         return list(dict.fromkeys(value))
 
-    def to_db(self, session: Session) -> "InvoiceDB":
+    def to_db(self, session: Session) -> InvoiceDB:
         """Build an unsaved invoice snapshot from existing stored transactions."""
-        from .db_classes import InvoiceDB, TransactionDB
-
         stored = session.exec(
             select(TransactionDB).where(col(TransactionDB.id).in_(self.transaction_ids))
         ).all()
@@ -169,7 +169,7 @@ class InvoiceCreateAPI(SQLModel):
 
         snapshots = [
             InvoiceTransactionAPI(
-                transaction_id=transaction_id, **by_id[transaction_id].to_api().model_dump()
+                transaction_id=transaction_id, **TransactionAPI.from_db(by_id[transaction_id]).model_dump()
             )
             for transaction_id in self.transaction_ids
         ]
@@ -211,3 +211,23 @@ class InvoiceAPI(InvoiceBase):
     transactions: list[InvoiceTransactionAPI] = Field(min_length=1)
     tax_rollup: list[TaxLineAPI]
     fee_rollup: list[FeeLineAPI]
+
+    @classmethod
+    def from_db(cls, db: InvoiceDB) -> Self:
+        """Read the stored snapshot, independently of live transaction changes."""
+        return cls.model_validate({
+            "id": db.id,
+            "currency": db.currency,
+            "total": db.total,
+            "transaction_ids": [snapshot["transaction_id"] for snapshot in db.transaction_snapshots],
+            "transactions": db.transaction_snapshots,
+            "tax_rollup": db.tax_rollup,
+            "fee_rollup": db.fee_rollup,
+        })
+
+
+def get_transaction_api(session: Session, transaction_id: int) -> TransactionAPI | None:
+    """Load nested relationships before converting to API schema."""
+    stmt = select(TransactionDB).where(TransactionDB.id == transaction_id)
+    db = session.exec(stmt).first()
+    return TransactionAPI.from_db(db) if db is not None else None

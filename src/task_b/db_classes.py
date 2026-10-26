@@ -5,16 +5,13 @@ Import this module before accessing SQLModel.metadata in Alembic's env.py.
 from typing import Any
 
 from sqlalchemy import JSON
-from sqlmodel import Field, Relationship, SQLModel
-from sqlalchemy.orm import selectinload
-from sqlmodel import Session, select
+from sqlmodel import Field, Relationship
 
 from .base_classes import (
     TaxLineBase, FeeLineBase, FlightCouponBase, FlightMetadataBase,
     HotelAddressBase, HotelExtraBase, HotelMetadataBase, RailLegBase,
     RailMetadataBase, NavanFeeMetadataBase, TransactionBase, InvoiceBase,
 )
-from .api_classes import InvoiceAPI, TransactionAPI
 
 # SQLModel uses 'sa_relationship_kwargs', not 'sa_kwargs', for loader options.
 # 'selectin' eager loading batches collections and avoids most N+1 queries.
@@ -105,18 +102,6 @@ class InvoiceDB(InvoiceBase, table=True):
         back_populates="invoice", sa_relationship_kwargs=EAGER
     )
 
-    def to_api(self) -> InvoiceAPI:
-        """Read the stored snapshot, independently of live transaction changes."""
-        return InvoiceAPI.model_validate({
-            "id": self.id,
-            "currency": self.currency,
-            "total": self.total,
-            "transaction_ids": [snapshot["transaction_id"] for snapshot in self.transaction_snapshots],
-            "transactions": self.transaction_snapshots,
-            "tax_rollup": self.tax_rollup,
-            "fee_rollup": self.fee_rollup,
-        })
-
 
 class TransactionDB(TransactionBase, table=True):
     __tablename__ = "transaction" # type: ignore
@@ -129,14 +114,3 @@ class TransactionDB(TransactionBase, table=True):
     hotel_metadata: HotelMetadataDB | None = Relationship(back_populates="transaction", cascade_delete=True, sa_relationship_kwargs={"lazy": "selectin", "uselist": False, "single_parent": True})
     rail_metadata: RailMetadataDB | None = Relationship(back_populates="transaction", cascade_delete=True, sa_relationship_kwargs={"lazy": "selectin", "uselist": False, "single_parent": True})
     navan_fee_metadata: NavanFeeMetadataDB | None = Relationship(back_populates="transaction", cascade_delete=True, sa_relationship_kwargs={"lazy": "selectin", "uselist": False, "single_parent": True})
-
-    def to_api(self) -> TransactionAPI:
-        """Validate this loaded ORM graph into an ID-free nested API schema."""
-        return TransactionAPI.model_validate(self, from_attributes=True)
-
-
-def get_transaction_api(session: Session, transaction_id: int) -> TransactionAPI | None:
-    """Load nested relationships before converting to API schema."""
-    stmt = select(TransactionDB).where(TransactionDB.id == transaction_id)
-    db = session.exec(stmt).first()
-    return db.to_api() if db is not None else None

@@ -29,7 +29,7 @@ uv run python main.py
 ```
 
 Startup applies Alembic migrations before serving the API at
-`http://127.0.0.1:8000`. SQLite data is stored in `app.db` in the project root.
+`http://127.0.0.1:8000`. SQLite data is stored in `app.db` in the project root. `app.db` gets automatically created when you start the api for the first time.
 Interactive request and response schemas are available at
 `http://127.0.0.1:8000/docs`. Stop the server with `Ctrl+C`.
 

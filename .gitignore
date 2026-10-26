@@ -10,3 +10,9 @@ wheels/
 .venv
 
 .vscode
+
+.pytest_cache/
+/.pytest-*/
+/app.db
+/app.db-*
+/.backups/

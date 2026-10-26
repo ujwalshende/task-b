@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -8,7 +8,7 @@ from sqlmodel import Session
 
 from .api_classes import TransactionCreateAPI, TransactionResponseAPI
 from .database import get_session
-from .queries import DuplicateTransactionError, create_transaction
+from .queries import DuplicateTransactionError, create_transaction, get_transaction_api
 
 api = FastAPI()
 
@@ -40,6 +40,16 @@ def post_transaction(
     transaction: TransactionCreateAPI, session: Annotated[Session, Depends(get_session)]
 ) -> TransactionResponseAPI:
     return create_transaction(session, transaction)
+
+
+@api.get("/transactions/{transaction_id}", response_model=TransactionResponseAPI)
+def read_transaction(
+    transaction_id: int, session: Annotated[Session, Depends(get_session)]
+) -> TransactionResponseAPI:
+    transaction = get_transaction_api(session, transaction_id)
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return transaction
 
 
 @api.get("/")

@@ -2,20 +2,37 @@
 from decimal import Decimal
 from typing import Self
 
-from pydantic import field_validator, model_validator
+from pydantic import ValidationInfo, field_validator, model_validator
 from sqlmodel import Field, Session, SQLModel, col, select
 from sqlmodel._compat import SQLModelConfig
 
 from .base_classes import (
-    TaxLineBase, FeeLineBase, FlightCouponBase, FlightMetadataBase,
-    HotelAddressBase, HotelExtraBase, HotelMetadataBase, RailLegBase,
-    RailMetadataBase, NavanFeeMetadataBase, TransactionBase, InvoiceBase,
+    FeeLineBase,
+    FlightCouponBase,
+    FlightMetadataBase,
+    HotelAddressBase,
+    HotelExtraBase,
+    HotelMetadataBase,
+    InvoiceBase,
+    NavanFeeMetadataBase,
+    RailLegBase,
+    RailMetadataBase,
+    TaxLineBase,
+    TransactionBase,
 )
-
 from .db_classes import (
-    TransactionDB, TaxLineDB, FeeLineDB, FlightMetadataDB, FlightCouponDB,
-    HotelMetadataDB, HotelAddressDB, HotelExtraDB, RailMetadataDB,
-    RailLegDB, NavanFeeMetadataDB, InvoiceDB,
+    FeeLineDB,
+    FlightCouponDB,
+    FlightMetadataDB,
+    HotelAddressDB,
+    HotelExtraDB,
+    HotelMetadataDB,
+    InvoiceDB,
+    NavanFeeMetadataDB,
+    RailLegDB,
+    RailMetadataDB,
+    TaxLineDB,
+    TransactionDB,
 )
 
 
@@ -130,6 +147,45 @@ class TransactionAPI(TransactionBase, table=False):
         if self.navan_fee_metadata is not None:
             db.navan_fee_metadata = NavanFeeMetadataDB(**self.navan_fee_metadata.model_dump())
         return db
+
+
+class TransactionCreateAPI(TransactionBase):
+    """Public transaction input using the assignment's single metadata field."""
+
+    model_config = SQLModelConfig(extra="forbid", populate_by_name=True)
+
+    tax_lines: list[TaxLineAPI]
+    fee_lines: list[FeeLineAPI]
+    transaction_metadata: TransactionMetadataAPI = Field(alias="metadata")
+
+    @field_validator("transaction_metadata", mode="before")
+    @classmethod
+    def validate_metadata(cls, value: object, info: ValidationInfo) -> TransactionMetadataAPI:
+        metadata_model = METADATA_API_MODELS.get(str(info.data.get("type")))
+        if metadata_model is None:
+            raise ValueError("A valid transaction type is required to validate metadata")
+        return metadata_model.model_validate(value)
+
+    def to_db(self) -> TransactionDB:
+        data = self.model_dump(exclude={"transaction_metadata"})
+        data[f"{self.type}_metadata"] = self.transaction_metadata
+        return TransactionAPI.model_validate(data).to_db()
+
+
+class TransactionResponseAPI(TransactionCreateAPI):
+    """Stored transaction, including its server-generated primary key."""
+
+    id: int = Field(gt=0)
+
+    @classmethod
+    def from_db(cls, db: TransactionDB) -> Self:
+        transaction = TransactionAPI.from_db(db)
+        data = transaction.model_dump(exclude={
+            "flight_metadata", "hotel_metadata", "rail_metadata", "navan_fee_metadata",
+        })
+        data["metadata"] = getattr(transaction, f"{transaction.type}_metadata")
+        data["id"] = db.id
+        return cls.model_validate(data)
 
 
 class InvoiceTransactionAPI(TransactionAPI):

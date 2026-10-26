@@ -34,7 +34,6 @@ from .db_classes import (
     HotelExtraDB,
     HotelMetadataDB,
     InvoiceDB,
-    InvoiceTransactionReferenceDB,
     NavanFeeMetadataDB,
     RailLegDB,
     RailMetadataDB,
@@ -288,14 +287,6 @@ class InvoiceCreateAPI(SQLModel):
             db.tax_rollup = tax_rollup
             db.fee_rollup = fee_rollup
         db.transactions = transactions
-        references = {reference.transaction_id: reference for reference in db.snapshot_references}
-        updated_references = []
-        for transaction_id in self.transaction_ids:
-            reference = references.get(transaction_id)
-            if reference is None:
-                reference = InvoiceTransactionReferenceDB(transaction_id=transaction_id, invoice=db)
-            updated_references.append(reference)
-        db.snapshot_references = updated_references
         return db
 
 

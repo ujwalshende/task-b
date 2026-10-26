@@ -71,7 +71,7 @@ def _ensure_unbilled(session: Session, db: TransactionDB) -> None:
         .where(InvoiceTransactionReferenceDB.transaction_id == db.id)
         .limit(1)
     ).first()
-    if db.invoice_id is not None or reference is not None:
+    if reference is not None:
         raise BilledTransactionError("Transaction is already on an invoice")
 
 

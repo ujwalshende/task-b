@@ -1,8 +1,8 @@
-"""create transaction and invoice tables
+"""initial transaction and invoice schema
 
-Revision ID: fa3997e29fb4
+Revision ID: b93f1c5c073c
 Revises:
-Create Date: 2026-10-26 02:05:18.151421
+Create Date: 2026-10-26 17:37:27.630166
 
 """
 
@@ -14,7 +14,7 @@ import sqlmodel.sql.sqltypes
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "fa3997e29fb4"
+revision: str = "b93f1c5c073c"
 down_revision: str | Sequence[str] | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -41,13 +41,8 @@ def upgrade() -> None:
         sa.Column("occurred_at", sqlmodel.sql.sqltypes.UTCDateTime(), nullable=False),
         sa.Column("total", sa.DECIMAL(precision=12, scale=2), nullable=False),
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("invoice_id", sa.Integer(), nullable=True),
-        sa.ForeignKeyConstraint(["invoice_id"], ["invoice.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("external_id"),
-    )
-    op.create_index(
-        op.f("ix_transaction_invoice_id"), "transaction", ["invoice_id"], unique=False
     )
     op.create_table(
         "fee_line",
@@ -92,6 +87,22 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("transaction_id"),
+    )
+    op.create_table(
+        "invoice_transaction_reference",
+        sa.Column("invoice_id", sa.Integer(), nullable=False),
+        sa.Column("transaction_id", sa.Integer(), nullable=False),
+        sa.ForeignKeyConstraint(["invoice_id"], ["invoice.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["transaction_id"], ["transaction.id"], ondelete="RESTRICT"
+        ),
+        sa.PrimaryKeyConstraint("invoice_id", "transaction_id"),
+    )
+    op.create_index(
+        op.f("ix_invoice_transaction_reference_transaction_id"),
+        "invoice_transaction_reference",
+        ["transaction_id"],
+        unique=False,
     )
     op.create_table(
         "navan_fee_metadata",
@@ -222,11 +233,15 @@ def downgrade() -> None:
     op.drop_table("tax_line")
     op.drop_table("rail_metadata")
     op.drop_table("navan_fee_metadata")
+    op.drop_index(
+        op.f("ix_invoice_transaction_reference_transaction_id"),
+        table_name="invoice_transaction_reference",
+    )
+    op.drop_table("invoice_transaction_reference")
     op.drop_table("hotel_metadata")
     op.drop_table("flight_metadata")
     op.drop_index(op.f("ix_fee_line_transaction_id"), table_name="fee_line")
     op.drop_table("fee_line")
-    op.drop_index(op.f("ix_transaction_invoice_id"), table_name="transaction")
     op.drop_table("transaction")
     op.drop_table("invoice")
     # ### end Alembic commands ###

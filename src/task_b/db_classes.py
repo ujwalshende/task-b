@@ -101,6 +101,14 @@ class NavanFeeMetadataDB(NavanFeeMetadataBase, table=True):
     transaction: "TransactionDB" = Relationship(back_populates="navan_fee_metadata", sa_relationship_kwargs=EAGER)
 
 
+class InvoiceTransactionReferenceDB(SQLModel, table=True):
+    """Associate each saved invoice with all transactions included in its snapshot."""
+
+    __tablename__ = "invoice_transaction_reference" # type: ignore
+    invoice_id: int = Field(foreign_key="invoice.id", ondelete="CASCADE", primary_key=True)
+    transaction_id: int = Field(foreign_key="transaction.id", ondelete="RESTRICT", primary_key=True, index=True)
+
+
 class InvoiceDB(InvoiceBase, table=True):
     __tablename__ = "invoice" # type: ignore
     id: int | None = Field(default=None, primary_key=True)
@@ -108,33 +116,17 @@ class InvoiceDB(InvoiceBase, table=True):
     tax_rollup: list[dict[str, Any]] = Field(sa_type=JSON)
     fee_rollup: list[dict[str, Any]] = Field(sa_type=JSON)
     transactions: list["TransactionDB"] = Relationship(
-        back_populates="invoice", sa_relationship_kwargs=EAGER
+        link_model=InvoiceTransactionReferenceDB, sa_relationship_kwargs=EAGER
     )
-    snapshot_references: list["InvoiceTransactionReferenceDB"] = Relationship(
-        back_populates="invoice", cascade_delete=True, sa_relationship_kwargs=EAGER
-    )
-
-
-class InvoiceTransactionReferenceDB(SQLModel, table=True):
-    """
-    Created to store invoice_id and transaction_id mappings. Two invoices can reference the same transaction_id. 
-    Deleting the latest live parent invoice one makes the invoice_id in TransactionDB None. But it still exists on the old invoice.
-    """
-    __tablename__ = "invoice_transaction_reference" # type: ignore
-    invoice_id: int = Field(foreign_key="invoice.id", ondelete="CASCADE", primary_key=True)
-    transaction_id: int = Field(foreign_key="transaction.id", ondelete="RESTRICT", primary_key=True, index=True)
-    invoice: InvoiceDB = Relationship(back_populates="snapshot_references")
-
-    def __init__(self, *, transaction_id: int, invoice: InvoiceDB) -> None:
-        """Link the parent object; SQLAlchemy fills invoice_id when it is saved."""
-        super().__init__(transaction_id=transaction_id, invoice=invoice)
 
 
 class TransactionDB(TransactionBase, table=True):
     __tablename__ = "transaction" # type: ignore
     id: int | None = Field(default=None, primary_key=True)
-    invoice_id: int | None = Field(default=None, foreign_key="invoice.id", ondelete="SET NULL", nullable=True, index=True)
-    invoice: InvoiceDB | None = Relationship(back_populates="transactions")
+    # Membership is edited through InvoiceDB.transactions; this collection is for lookup.
+    invoices: list[InvoiceDB] = Relationship(
+        link_model=InvoiceTransactionReferenceDB, sa_relationship_kwargs={"viewonly": True}
+    )
     tax_lines: list[TaxLineDB] = Relationship(back_populates="transaction", cascade_delete=True, sa_relationship_kwargs=EAGER)
     fee_lines: list[FeeLineDB] = Relationship(back_populates="transaction", cascade_delete=True, sa_relationship_kwargs=EAGER)
     flight_metadata: FlightMetadataDB | None = Relationship(back_populates="transaction", cascade_delete=True, sa_relationship_kwargs={"lazy": "selectin", "uselist": False, "single_parent": True})

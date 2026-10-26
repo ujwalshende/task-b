@@ -16,7 +16,7 @@ From the project root, install Python and the locked project dependencies:
 
 ```bash
 uv python install 3.15
-uv sync --locked
+uv sync --locked --dev
 ```
 
 The project requires Python 3.15 or newer. uv manages the interpreter and the

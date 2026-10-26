@@ -370,6 +370,7 @@ class TestAdditional:
             create_invoice(client, [fee["id"]])
         with Session(db_engine) as session:
             stored = session.get(TransactionDB, fee["id"])
+            assert stored is not None
             stored.total = Decimal("999.00")
             session.commit()
 

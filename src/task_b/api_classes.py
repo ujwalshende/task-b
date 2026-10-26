@@ -1,4 +1,4 @@
-"""Nested ID-free input/output schemas, preserving the four metadata field names."""
+"""Transaction and invoice request, response, and snapshot schemas."""
 from decimal import Decimal
 from typing import Self
 
@@ -90,65 +90,6 @@ METADATA_API_MODELS = {
 }
 
 
-class TransactionAPI(TransactionBase, table=False):
-    model_config = SQLModelConfig(from_attributes=True, populate_by_name=True)
-
-    tax_lines: list[TaxLineAPI]
-    fee_lines: list[FeeLineAPI]
-    flight_metadata: FlightMetadataAPI | None = None
-    hotel_metadata: HotelMetadataAPI | None = None
-    rail_metadata: RailMetadataAPI | None = None
-    navan_fee_metadata: NavanFeeMetadataAPI | None = None
-
-    @model_validator(mode="after")
-    def validate_transaction_metadata(self):
-        required_field = f"{self.type}_metadata"
-        if getattr(self, required_field) is None:
-            raise ValueError(f"{required_field} is required when type is '{self.type}'")
-        for field_name in (
-            "flight_metadata", "hotel_metadata", "rail_metadata", "navan_fee_metadata"
-        ):
-            if field_name != required_field and getattr(self, field_name) is not None:
-                raise ValueError(f"{field_name} must be None when type is '{self.type}'")
-        return self
-
-    @classmethod
-    def from_db(cls, db: TransactionDB) -> Self:
-        """Validate a loaded ORM graph into an ID-free nested API schema."""
-        return cls.model_validate(db, from_attributes=True)
-
-    def to_db(self) -> TransactionDB:
-        """Create a fresh, unsaved ORM graph from this validated API input."""
-        data = self.model_dump(exclude={
-            "tax_lines", "fee_lines", "flight_metadata", "hotel_metadata",
-            "rail_metadata", "navan_fee_metadata",
-        })
-        db = TransactionDB(**data)
-        db.tax_lines = [TaxLineDB(**x.model_dump()) for x in self.tax_lines]
-        db.fee_lines = [FeeLineDB(**x.model_dump()) for x in self.fee_lines]
-        if self.flight_metadata is not None:
-            m = self.flight_metadata
-            db.flight_metadata = FlightMetadataDB(
-                **m.model_dump(exclude={"coupons"}),
-                coupons=[FlightCouponDB(**c.model_dump()) for c in m.coupons],
-            )
-        if self.hotel_metadata is not None:
-            m = self.hotel_metadata
-            db.hotel_metadata = HotelMetadataDB(
-                **m.model_dump(exclude={"address", "extras"}),
-                address=HotelAddressDB(**m.address.model_dump()),
-                extras=[HotelExtraDB(**e.model_dump()) for e in m.extras],
-            )
-        if self.rail_metadata is not None:
-            m = self.rail_metadata
-            db.rail_metadata = RailMetadataDB(
-                legs=[RailLegDB(**leg.model_dump()) for leg in m.legs],
-            ) # type: ignore
-        if self.navan_fee_metadata is not None:
-            db.navan_fee_metadata = NavanFeeMetadataDB(**self.navan_fee_metadata.model_dump())
-        return db
-
-
 class TransactionCreateAPI(TransactionBase):
     """Public transaction input using the assignment's single metadata field."""
 
@@ -167,9 +108,29 @@ class TransactionCreateAPI(TransactionBase):
         return metadata_model.model_validate(value)
 
     def to_db(self) -> TransactionDB:
-        data = self.model_dump(exclude={"transaction_metadata"})
-        data[f"{self.type}_metadata"] = self.transaction_metadata
-        return TransactionAPI.model_validate(data).to_db()
+        """Create a fresh, unsaved ORM graph from this validated request."""
+        db = TransactionDB(**self.model_dump(include=set(TransactionBase.model_fields)))
+        db.tax_lines = [TaxLineDB(**tax.model_dump()) for tax in self.tax_lines]
+        db.fee_lines = [FeeLineDB(**fee.model_dump()) for fee in self.fee_lines]
+        metadata = self.transaction_metadata
+        if isinstance(metadata, FlightMetadataAPI):
+            db.flight_metadata = FlightMetadataDB(
+                **metadata.model_dump(exclude={"coupons"}),
+                coupons=[FlightCouponDB(**coupon.model_dump()) for coupon in metadata.coupons],
+            )
+        elif isinstance(metadata, HotelMetadataAPI):
+            db.hotel_metadata = HotelMetadataDB(
+                **metadata.model_dump(exclude={"address", "extras"}),
+                address=HotelAddressDB(**metadata.address.model_dump()),
+                extras=[HotelExtraDB(**extra.model_dump()) for extra in metadata.extras],
+            )
+        elif isinstance(metadata, RailMetadataAPI):
+            db.rail_metadata = RailMetadataDB(
+                legs=[RailLegDB(**leg.model_dump()) for leg in metadata.legs],
+            ) # type: ignore
+        else:
+            db.navan_fee_metadata = NavanFeeMetadataDB(**metadata.model_dump())
+        return db
 
 
 class TransactionResponseAPI(TransactionCreateAPI):
@@ -179,19 +140,46 @@ class TransactionResponseAPI(TransactionCreateAPI):
 
     @classmethod
     def from_db(cls, db: TransactionDB) -> Self:
-        transaction = TransactionAPI.from_db(db)
-        data = transaction.model_dump(exclude={
-            "flight_metadata", "hotel_metadata", "rail_metadata", "navan_fee_metadata",
-        })
-        data["metadata"] = getattr(transaction, f"{transaction.type}_metadata")
+        """Validate a stored transaction directly into the public response."""
+        for kind in METADATA_API_MODELS:
+            field_name = f"{kind}_metadata"
+            if kind != db.type and getattr(db, field_name) is not None:
+                raise ValueError(f"{field_name} must be None when type is '{db.type}'")
+        data = db.model_dump(include=set(TransactionBase.model_fields))
+        data["metadata"] = getattr(db, f"{db.type}_metadata")
+        data["tax_lines"] = db.tax_lines
+        data["fee_lines"] = db.fee_lines
         data["id"] = db.id
-        return cls.model_validate(data)
+        return cls.model_validate(data, from_attributes=True)
 
 
-class InvoiceTransactionAPI(TransactionAPI):
+class InvoiceTransactionAPI(TransactionCreateAPI):
     """A frozen transaction, with its original database identity."""
 
     transaction_id: int = Field(gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_saved_metadata(cls, value: object) -> object:
+        # Earlier snapshots stored four metadata attributes instead of one metadata field.
+        if isinstance(value, dict) and "metadata" not in value and "transaction_metadata" not in value:
+            data = dict(value)
+            for kind in METADATA_API_MODELS:
+                metadata = data.pop(f"{kind}_metadata", None)
+                if kind == data.get("type"):
+                    data["metadata"] = metadata
+                elif metadata is not None:
+                    raise ValueError(f"{kind}_metadata must be None when type is '{data.get('type')}'")
+            return data
+        return value
+
+    @classmethod
+    def from_db(cls, db: TransactionDB) -> Self:
+        transaction = TransactionResponseAPI.from_db(db)
+        return cls.model_validate({
+            **transaction.model_dump(exclude={"id"}),
+            "transaction_id": transaction.id,
+        })
 
 
 class InvoiceCreateAPI(SQLModel):
@@ -224,9 +212,7 @@ class InvoiceCreateAPI(SQLModel):
             raise ValueError("All invoice transactions must use the same currency")
 
         snapshots = [
-            InvoiceTransactionAPI(
-                transaction_id=transaction_id, **TransactionAPI.from_db(by_id[transaction_id]).model_dump()
-            )
+            InvoiceTransactionAPI.from_db(by_id[transaction_id])
             for transaction_id in self.transaction_ids
         ]
         taxes: dict[tuple[str, Decimal | None], Decimal] = {}
@@ -252,7 +238,7 @@ class InvoiceCreateAPI(SQLModel):
         return InvoiceDB(
             currency=invoice.currency,
             total=invoice.total,
-            transaction_snapshots=[snapshot.model_dump(mode="json") for snapshot in invoice.transactions],
+            transaction_snapshots=[snapshot.model_dump(mode="json", by_alias=True) for snapshot in invoice.transactions],
             tax_rollup=[tax.model_dump(mode="json") for tax in invoice.tax_rollup],
             fee_rollup=[fee.model_dump(mode="json") for fee in invoice.fee_rollup],
             transactions=transactions,
